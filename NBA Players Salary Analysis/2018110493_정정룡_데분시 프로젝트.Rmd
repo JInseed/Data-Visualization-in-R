@@ -1,0 +1,3156 @@
+---
+title: "2018110493_정정룡_데분시프로젝트"
+output: html_document
+---
+
+NBA player stats 이용한 salary 예측
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r}
+library(tidyverse)
+library(modelr)
+library(gridExtra)
+```
+
+#
+### **데이터 불러오기**
+```{r}
+df=read.csv('C:/Users/82102/Desktop/project_데분시/players_stats2014.csv',header=T)
+```
+
+#
+### **데이터 전처리**
+```{r}
+colSums(is.na(df))
+#결측치 다수 존재
+
+df %>% 
+  count(Name) %>% 
+  filter(n>1) 
+#중복된 선수 없음 확인
+```
+
+#
+#### **사용하지 않을 열 삭제**
+
+```{r}
+df2=df %>% 
+  select(-c('Birthdate', 'Birth_Place' ,'Collage', 'Experience','AST.TOV','STL.TOV','EFF'))
+```
+
+#
+* **salary data, 2014-2015년도의 기량으로 2015-2016 salary가 정해졌다고 볼 수 있지만 2015-2016의 salary 데이터를 이용하여 2014-2015의 선수들의 stat을 비교하면 누락치가 많이 나와 2014-2015의 salary를 이용하여 분석 진행**
+
+
+```{r}
+salary=read.csv('C:/Users/82102/Desktop/project_데분시/Salary.csv',header=T)
+
+salary_2=salary %>% 
+  filter(season=='2014-2015')
+```
+
+#
+* **stat, salary 의 선수명 이름 Name으로 바꾸고 데이터 형식이 A.J 인게 salary에선 AJ 이런게 있어서 .을 아예 빼서 join** 
+
+
+```{r}
+
+df2=df2 %>% 
+  mutate(Name=str_replace_all(Name, '\\.', ''))
+
+salary_3=salary_2 %>% 
+  mutate(Name=str_replace_all(player, '\\.', ''))
+
+join=df2 %>%
+  left_join(salary_3, by = "Name")
+```
+
+#
+* **salary 데이터가 없는 선수는 빼고, 중복되거나 필요없는 열 삭제**
+
+```{r}
+
+join=join %>% 
+  select(-c('team','player','season','position'))
+
+join2=join[!is.na(join$salary),]
+
+view(join2[apply(join2=='',1,any),])
+#Age, Height, Weight, BMI, Pos, Team이 동시에 빈 값인 것을 확인하여 그 행들은 결측치로 간주하여 제거
+
+stat2=join[!is.na(join$salary) & !apply(join=='',1,any),]
+
+```
+
+#
+* **PTS,MIN,OREB,BREB,REB,AST,BLK,TOV,PF의 경우 총 개수로 산정되어 있음. 게임 뛰는 시간이 많은 선수는 자연스럽게 각 개수가 많아 질 것. 따라서 실력을 측정할 수 있도록 각각을 게임 수로 나누어 새로운 변수 생성. 물론 게임을 많이 뛰는 선수가 더 좋은 선수일 가능성이 높으니 고려하여 분석 진행. 또한 공격 리바운드+수비 리바운드는 총 리바운드이기 때문에 총 리바운드는 분석에서 제외 한다. 신체 관련 변수도 분석에서는 제외**
+
+
+```{r}
+stat2=stat2 %>% 
+  mutate(PTS.=PTS/Games.Played,
+         MIN.=MIN/Games.Played,
+         OREB.=OREB/Games.Played,
+         DREB.=DREB/Games.Played,
+         REB.=REB/Games.Played,
+         AST.=AST/Games.Played,
+         STL.=STL/Games.Played,
+         BLK.=BLK/Games.Played,
+         TOV.=TOV/Games.Played,
+         PF.=PF/Games.Played,)
+
+
+stat=stat2 %>% 
+  select(c('Name','Games.Played','MIN','MIN.','PTS','PTS.','FGM','FGA','FG.','X3PM','X3PA','X3P.','FTM','FTA','FT.','OREB','OREB.','DREB','DREB.','REB','REB.','AST','AST.','STL','STL.','BLK','BLK.','TOV','TOV.','PF','PF.','Pos','Team','Age','Height','Weight','BMI','salary'))
+
+
+stat$Pos=as.factor(stat$Pos)
+
+
+colSums(is.na(stat))
+#결측치 처리 완료
+```
+
+***
+
+EDA(변수별)
+---
+
+* **총 출전 시간이 많으면 자연스럽게 각 스탯의 총 횟수는 많아질 것. 따라서 이를 고려한 salary와의 관계와 실력적인 면, 즉 각 스탯의 총 횟수들을 게임 출전 횟수로 나누어 한 게임당 평균으로 salary와의 관계를 비교하여 살펴 볼 것. 또한 포지션 별로 각 스탯이 상이하게 나타날테니 이 또한 고려하여 살펴 볼 것.**
+
+### 1.변수별 분포 확인 및 설명
+```{r}
+#Name : 선수이름
+#Games.Played : 게임 출전 총 횟수
+#MIN : 게임 출전 총 시간
+#MIN. : 평균 게임 출전 시간
+#PTS : 골 넣은 총 점수
+#PTS. : 평균 골 넣은 점수
+#FGM : 2점 슛 성공 횟수
+#FGA : 2점 슛 시도 횟수
+#FG. : 2점 슛 총 성공 확률
+#X3PM : 3점 슛 총 성공 횟수
+#X3PA : 3점 슛 총 시도 횟수
+#X3P. :  3점 슛 성공확률
+#FTM : 자유투 총 성공 횟수
+#FTA : 자유투 총 시도 횟수
+#FT. :  자유투 성공 확률
+#OREB : 총 공격 리바운드 횟수, 상대편 진영에서 리바운드 할 때
+#OREB. : 평균 공격 리바운드 횟수
+#DREB : 총 수비 리바운드 횟수, 본인 진영에서 리바운드 할 때
+#DREB. : 평균 수비 리바운드 횟수
+#REB : 총 리바운드 횟수
+#REB. : 평균 리바운드 횟수
+#AST : 총 어시스트 횟수
+#AST. : 평균 어시스트 횟수
+#STL : 총 스틸 횟수
+#STL. : 평균 스틸 횟수
+#BLK : 총 블락 횟수
+#BLK. : 평균 블락 횟수
+#TOV : 총 턴오버 횟수, 실수로 인해 상대편에게 공격권을 넘겨줄 때
+#TOV. : 평균 턴오버 횟수
+#PF :  총 파울 횟수
+#PF. :  평균 파울 횟수
+#Pos : 포지션
+#Team : 팀 이름
+#Age : 나이
+#Height : 키
+#Weight : 몸무게
+#BMI : BMI
+#salary : 연봉
+
+str(stat)
+```
+
+#### 1-1) 총 출전 시간, 평균 출전 시간
+
+##### 총 출전 시간
+```{r}
+stat %>% 
+  ggplot(aes(MIN))+
+  geom_histogram(fill = "cornflowerblue", 
+                 color='white',
+                 binwidth = 100)+
+  labs(title='총 출전 시간 분포',
+       y = "Count", 
+       x = "총 출전 시간")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(MIN),
+                 color='white',
+                 position='fill',
+                 binwidth = 100,
+                 alpha=.7)+
+  labs(title='포지션 별 총 출전 시간 분포',
+       y = "Count", 
+       x = "총 출전 시간")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(MIN),
+                 color='white',
+                 position='stack',
+                 binwidth = 100,
+                 alpha=.7)+
+  labs(title='포지션 별 총 출전 시간 분포',
+       y = "Count", 
+       x = "총 출전 시간")
+
+#특별한 특징은 보이지 않는다
+```
+
+##### 평균 출전 시간
+
+```{r}
+stat %>% 
+  ggplot(aes(MIN.))+
+  geom_histogram(fill = "cornflowerblue", 
+                 color='white',
+                 binwidth = 1)+
+  labs(title='평균 출전 시간 분포',
+       y = "Count", 
+       x = "평균 출전 시간")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(MIN.),
+                 color='white',
+                 position='fill',
+                 binwidth = 1,
+                 alpha=.7)+
+  labs(title='포지션 별 평균 출전 시간 분포',
+       y = "Count", 
+       x = "평균 출전 시간")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(MIN.),
+                 color='white',
+                 position='stack',
+                 binwidth = 1,
+                 alpha=.7)+
+  labs(title='포지션 별 평균 출전 시간 분포',
+       y = "Count", 
+       x = "평균 출전 시간")
+
+#특별한 특징은 보이지 않는다
+```
+
+##### 포지션 별 boxplot(총 출전 시간, 평균 출전 시간)
+##### 총 출전 시간
+
+```{r}
+stat %>% 
+  ggplot(aes(x=fct_reorder(Pos, desc(MIN)), 
+             y=MIN, 
+             fill=fct_reorder(Pos, desc(MIN))))+
+  geom_violin(fill='lavender', alpha=.5)+
+  geom_boxplot(width=.5,
+               varwidth = TRUE,
+               alpha=.5)+
+  labs(title='포지션 별 총 출전 시간 분포',
+       y='총 출전 시간',
+       x='포지션',
+       fill='포지션')
+
+#큰 차이가 있지는 않으나 파워포워드의 경우 조금 낮은 징후를 보인다
+```
+
+
+##### 평균 출전 시간
+```{r}
+stat %>% 
+  ggplot(aes(x = fct_reorder(Pos, desc(MIN.)), 
+             y = MIN., 
+             fill = fct_reorder(Pos, desc(MIN.))))+
+  geom_violin(fill='lavender', alpha=.5)+
+  geom_boxplot(width=.5,
+               varwidth = TRUE,
+               alpha=.5)+
+  labs(title='포지션 별 평균 출전 시간 분포',
+       y='평균 출전 시간',
+       x='포지션',
+       fill='포지션')
+
+#센터나 포워드가 평균 출전 시간이 비교적 낮은 모습을 보인다
+```
+
+#### 1-2)총 골 넣은 점수, 평균 골 넣은 점수
+##### 총 골 넣은 점수
+```{r}
+stat %>% 
+  ggplot(aes(PTS))+
+  geom_histogram(fill = "cornflowerblue", 
+                 color='white',
+                 binwidth = 100)+
+  labs(title='총 골 넣은 점수 분포',
+       y = "Count", 
+       x = "총 골 넣은 점수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(PTS),
+                 color='white',
+                 position='fill',
+                 binwidth = 100,
+                 alpha=.7)+
+  labs(title='포지션 별 총 골 넣은 점수 분포',
+       y = "Count", 
+       x = "총 골 넣은 점수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(PTS),
+                 color='white',
+                 position='stack',
+                 binwidth = 100,
+                 alpha=.7)+
+  labs(title='포지션 별 총 골 넣은 점수 분포',
+       y = "Count", 
+       x = "총 골 넣은 점수")
+
+#센터의 경우 총 골 넣은 점수가 매우 높은 경우에 분포하지 않는다
+```
+
+##### 평균 골 넣은 점수
+```{r}
+stat %>% 
+  ggplot(aes(PTS.))+
+  geom_histogram(fill = "cornflowerblue", 
+                 color='white',
+                 binwidth = 1)+
+  labs(title='평균 골 넣은 점수 분포',
+       y = "Count", 
+       x = "평균 골 넣은 점수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(PTS.),
+                 color='white',
+                 position='fill',
+                 binwidth = 1,
+                 alpha=.7)+
+  labs(title='포지션 별 평균 골 넣은 점수 분포',
+       y = "Count", 
+       x = "평균 골 넣은 점수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(PTS.),
+                 color='white',
+                 position='stack',
+                 binwidth = 1)+
+  labs(title='포지션 별 평균 골 넣은 점수 분포',
+       y = "Count", 
+       x = "평균 골 넣은 점수")
+
+
+#특별한 특징은 보이지 않는다
+
+```
+
+##### 포지션 별 boxplot(총 골 넣은 점수, 평균 골 넣은 점수)
+##### 총 골 넣은 점수
+```{r}
+stat %>% 
+  ggplot(aes(x=fct_reorder(Pos, desc(PTS)), 
+             y=PTS, 
+             fill=fct_reorder(Pos, desc(PTS))))+
+  geom_violin(fill='lavender', alpha=.5)+
+  geom_boxplot(width=.5,
+               varwidth = TRUE,
+               alpha=.5)+
+  labs(title='포지션 별 총 골 넣은 점수 분포',
+       y='총 골 넣은 점수',
+       x='포지션',
+       fill='포지션')
+
+#포지션 별로 큰 차이는 보이지 않으나 슈팅가드의 경우 매우 높은 점수들이 분포한다.
+```
+
+##### 평균 골 넣은 점수
+```{r}
+stat %>% 
+  ggplot(aes(x = fct_reorder(Pos, desc(PTS.)), 
+             y = PTS., 
+             fill = fct_reorder(Pos, desc(PTS.))))+
+  geom_violin(fill='lavender', alpha=.5)+
+  geom_boxplot(width=.5,
+               varwidth = TRUE,
+               alpha=.5)+
+  labs(title='포지션 별 평균 골 넣은 점수 분포',
+       y='평균 골 넣은 점수',
+       x='포지션',
+       fill='포지션')
+
+#포지션별로 큰 차이를 보이지는 않는다
+```
+
+#### 1-3) 총 2점 슛 성공 횟수,시도 횟수 및 성공 확률
+
+##### 총 2점 슛 성공 횟수
+```{r}
+stat %>% 
+  ggplot(aes(FGM))+
+  geom_histogram(fill = "cornflowerblue", 
+                 color='white',
+                 binwidth = 10)+
+  labs(title='총 2점 슛 성공 횟수 분포',
+       y = "Count", 
+       x = "총 2점 슛 성공 횟수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(FGM),
+                 color='white',
+                 position='fill',
+                 binwidth = 50,
+                 alpha=.7)+
+  labs(title='포지션 별 총 2점 슛 성공 횟수 분포',
+       y = "Count", 
+       x = "총 2점 슛 성공 횟수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(FGM),
+                 color='white',
+                 position='stack',
+                 binwidth = 50,
+                 alpha=.7)+
+  labs(title='포지션 별 총 2점 슛 성공 횟수 분포',
+       y = "Count", 
+       x = "총 2점 슛 성공 횟수")
+
+#큰 차이는 보이지 않는다
+```
+
+##### 총 2점 슛 시도 횟수
+```{r}
+stat %>% 
+  ggplot(aes(FGA))+
+  geom_histogram(fill = "cornflowerblue", 
+                 color='white',
+                 binwidth = 20)+
+  labs(title='총 2점 슛 시도 횟수 분포',
+       y = "Count", 
+       x = "총 2점 슛 시도 횟수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(FGA),
+                 color='white',
+                 position='fill',
+                 binwidth = 100,
+                 alpha=.7)+
+  labs(title='포지션 별 총 2점 슛 시도 횟수 분포',
+       y = "Count", 
+       x = "총 2점 슛 시도 횟수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(FGA),
+                 color='white',
+                 position='stack',
+                 binwidth = 100,
+                 alpha=.7)+
+  labs(title='포지션 별 총 2점 슛 시도 횟수 분포',
+       y = "Count", 
+       x = "총 2점 슛 시도 횟수")
+
+#큰 특징은 나타나지 않는다
+```
+
+##### 2점슛 성공 확률
+```{r}
+stat %>% 
+  ggplot(aes(FG.))+
+  geom_histogram(fill = "cornflowerblue", 
+                 color='white',
+                 binwidth = 1)+
+  labs(title='2점 슛 성공확률 분포',
+       y = "Count", 
+       x = "2점 슛 성공확률")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(FG.),
+                 color='white',
+                 position='fill',
+                 binwidth = 5,
+                 alpha=.7)+
+  labs(title='포지션 별 2점 슛 성공확률 분포',
+       y = "Count", 
+       x = "2점 슛 성공확률")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(FG.),
+                 color='white',
+                 position='stack',
+                 binwidth = 5,
+                 alpha=.7)+
+  labs(title='포지션 별 2점 슛 성공확률 분포',
+       y = "Count", 
+       x = "2점 슛 성공확률")
+
+#센터의 경우 높은 성공확률을 많이 보이고 가드의 경우는 낮은 성공확률을 보인다.
+```
+
+##### 포지션 별 boxplot(총 2점슛 성공 횟수, 시도횟수, 성공확률)
+##### 총 2점 슛 성공 횟수
+```{r}
+stat %>% 
+  ggplot(aes(x=fct_reorder(Pos, desc(FGM)), 
+             y=FGM, 
+             fill=fct_reorder(Pos, desc(FGM))))+
+  geom_violin(fill='lavender', alpha=.5)+
+  geom_boxplot(width=.5,
+               varwidth = TRUE,
+               alpha=.5)+
+  labs(title='포지션 별 총 2점슛 성공 횟수 분포',
+       y='총 2점슛 성공 횟수',
+       x='포지션',
+       fill='포지션')
+
+#가드가 포워드보다 2점슛 성공 횟수가 높음을 보인다
+```
+
+
+##### 총 2점슛 시도 횟수
+```{r}
+stat %>% 
+  ggplot(aes(x = fct_reorder(Pos, desc(FGA)), 
+             y = FGA, 
+             fill = fct_reorder(Pos, desc(FGA))))+
+  geom_violin(fill='lavender', alpha=.5)+
+  geom_boxplot(width=.5,
+               varwidth = TRUE,
+               alpha=.5)+
+  labs(title='포지션 별 총 2점슛 시도 횟수 분포',
+       y='총 2점슛 시도 횟수',
+       x='포지션',
+       fill='포지션')
+
+#가드가 다른 포지션에 비해 2점 슛 시도 횟수가 높음을 알 수 있다
+```
+
+
+##### 2점슛 성공 확률
+
+```{r}
+stat %>% 
+  ggplot(aes(x = fct_reorder(Pos, desc(FG.)), 
+             y = FG., 
+             fill = fct_reorder(Pos, desc(FG.))))+
+  geom_violin(fill='lavender', alpha=.5)+
+  geom_boxplot(width=.5,
+               varwidth = TRUE,
+               alpha=.5)+
+  labs(title='포지션 별 2점슛 성공 확률 분포',
+       y='2점슛 성공 확률',
+       x='포지션',
+       fill='포지션')
+
+#센터와 파워 포워드가 굉장히 높은 수치를 보이는데 골 밑에서 많이 시도하기 때문에 타당한 수치라고 판단할 수 있다.
+```
+
+#### 1-4) 총 3점 슛 성공 횟수,시도 횟수 및 성공 확률
+
+##### 총 3점 슛 성공 횟수
+```{r}
+stat %>% 
+  ggplot(aes(X3PM))+
+  geom_histogram(fill = "cornflowerblue", 
+                 color='white',
+                 binwidth = 10)+
+  labs(title='총 3점 슛 성공 횟수 분포',
+       y = "Count", 
+       x = "총 3점 슛 성공 횟수")
+
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(X3PM),
+                 color='white',
+                 position='fill',
+                 binwidth = 20,
+                 alpha=.7)+
+  labs(title='포지션 별 총 3점 슛 성공 횟수 분포',
+       y = "Count", 
+       x = "총 3점 슛 성공 횟수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(X3PM),
+                 color='white',
+                 position='stack',
+                 binwidth = 20,
+                 alpha=.7)+
+  labs(title='포지션 별 총 3점 슛 성공 횟수 분포',
+       y = "Count", 
+       x = "총 3점 슛 성공 횟수")
+
+#0에 수치가 꽤 많음을 볼 수 있다. 자세히 살펴보자
+#센터와 파워포워드의 경우 매우 낮은 수치를 갖는 경우가 많으며 슈팅 가드의 경우 높은 수치 쪽에 분포한다.
+```
+
+
+##### 총 3점 슛 시도 횟수
+```{r}
+stat %>% 
+  ggplot(aes(X3PA))+
+  geom_histogram(fill = "cornflowerblue", 
+                 color='white',
+                 binwidth = 20)+
+  labs(title='총 3점 슛 시도 횟수 분포',
+       y = "Count", 
+       x = "총 3점 슛 시도 횟수")
+
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(X3PA),
+                 color='white',
+                 position='fill',
+                 binwidth = 100,
+                 alpha=.7)+
+  labs(title='포지션 별 총 3점 슛 시도 횟수 분포',
+       y = "Count", 
+       x = "총 3점 슛 시도 횟수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(X3PA),
+                 color='white',
+                 position='stack',
+                 binwidth = 100,
+                 alpha=.7)+
+  labs(title='포지션 별 총 3점 슛 시도 횟수 분포',
+       y = "Count", 
+       x = "총 3점 슛 시도 횟수")
+
+#총 3점슛 성공 횟수와 비슷한 분포를 보인다
+```
+
+
+##### 3점슛 성공 확률
+```{r}
+stat %>% 
+  ggplot(aes(X3P.))+
+  geom_histogram(fill = "cornflowerblue", 
+                 color='white',
+                 binwidth = 1)+
+  labs(title='3점 슛 성공확률 분포',
+       y = "Count", 
+       x = "3점 슛 성공확률")
+
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(X3P.),
+                 color='white',
+                 position='fill',
+                 binwidth = 5,
+                 alpha=.7)+
+  labs(title='포지션 별 3점 슛 성공확률 분포',
+       y = "Count", 
+       x = "3점 슛 성공확률")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(X3P.),
+                 color='white',
+                 position='stack',
+                 binwidth = 5,
+                 alpha=.7)+
+  labs(title='포지션 별 3점 슛 성공확률 분포',
+       y = "Count", 
+       x = "3점 슛 성공확률")
+
+
+#0에 굉장히 많은 분포를 보인다. 이는 성공확률이 0이라기  보다 시도조차 안한 경우가 많이 있기 때문이다. 또한 이는 센터와 파워 포워드에 굉장히 많이 분포한다
+stat %>% 
+  filter(X3PA==0) %>% 
+  select(Pos) %>% 
+  table()
+
+stat %>% 
+  filter(X3PM==0) %>% 
+  select(Pos) %>% 
+  table()
+```
+
+##### 포지션 별 boxplot(총 3점슛 성공 횟수, 시도횟수, 성공확률)
+##### 총 3점 슛 성공 횟수
+```{r}
+stat %>% 
+  ggplot(aes(x=fct_reorder(Pos, desc(X3PM)), 
+             y=X3PM, 
+             fill=fct_reorder(Pos, desc(X3PM))))+
+  geom_violin(fill='lavender', alpha=.5)+
+  geom_boxplot(width=.5,
+               varwidth = TRUE,
+               alpha=.5)+
+  labs(title='포지션 별 총 3점슛 성공 횟수 분포',
+       y='총 3점슛 성공 횟수',
+       x='포지션',
+       fill='포지션')
+
+#센터의 경우 거의 분포가 없으며, 파워포워드의 경우도 평균은 거의 0에 가깝다
+```
+
+
+#####총 3점슛 시도 횟수
+```{r}
+stat %>% 
+  ggplot(aes(x = fct_reorder(Pos, desc(X3PA)), 
+             y = X3PA, 
+             fill = fct_reorder(Pos, desc(X3PA))))+
+  geom_violin(fill='lavender', alpha=.5)+
+  geom_boxplot(width=.5,
+               varwidth = TRUE,
+               alpha=.5)+
+  labs(title='포지션 별 총 3점슛 시도 횟수 분포',
+       y='총 3점슛 시도 횟수',
+       x='포지션',
+       fill='포지션')
+#위와 같은 맥락
+```
+
+##### 3점슛 성공 확률
+```{r}
+stat %>% 
+  ggplot(aes(x = fct_reorder(Pos, desc(X3P.)), 
+             y = X3P., 
+             fill = fct_reorder(Pos, desc(X3P.))))+
+  geom_violin(fill='lavender', alpha=.5)+
+  geom_boxplot(width=.5,
+               varwidth = TRUE,
+               alpha=.5)+
+  labs(title='포지션 별 3점슛 성공 확률 분포',
+       y='3점슛 성공 확률',
+       x='포지션',
+       fill='포지션')
+
+#센터는 평균이 0이고 파워포워드는 다른 포지션에 비해 매우 낮은 수치를 보인다
+```
+
+#### 1-5) 총 자유투 성공 횟수,시도 횟수 및 성공 확률
+
+##### 총 자유투 성공 횟수
+```{r}
+stat %>% 
+  ggplot(aes(FTM))+
+  geom_histogram(fill = "cornflowerblue", 
+                 color='white',
+                 binwidth = 20)+
+  labs(title='총 자유투 성공 횟수 분포',
+       y = "Count", 
+       x = "총 자유투 성공 횟수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(FTM),
+                 color='white',
+                 position='fill',
+                 binwidth = 20,
+                 alpha=.7)+
+  labs(title='포지션 별 총 자유투 성공 횟수 분포',
+       y = "Count", 
+       x = "총 자유투 성공 횟수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(FTM),
+                 color='white',
+                 position='stack',
+                 binwidth = 20,
+                 alpha=.7)+
+  labs(title='포지션 별 총 자유투 성공 횟수 분포',
+       y = "Count", 
+       x = "총 자유투 성공 횟수")
+
+#큰 특징은 보이지 않는다
+```
+
+##### 총 자유투 시도 횟수
+```{r}
+stat %>% 
+  ggplot(aes(FTA))+
+  geom_histogram(fill = "cornflowerblue", 
+                 color='white',
+                 binwidth = 20)+
+  labs(title='총 자유투 시도 횟수 분포',
+       y = "Count", 
+       x = "총 자유투 시도 횟수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(FTA),
+                 color='white',
+                 position='fill',
+                 binwidth = 100,
+                 alpha=.7)+
+  labs(title='포지션 별 총 자유투 시도 횟수 분포',
+       y = "Count", 
+       x = "총 자유투 시도 횟수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(FTA),
+                 color='white',
+                 position='stack',
+                 binwidth = 100,
+                 alpha=.7)+
+  labs(title='포지션 별 총 자유투 시도 횟수 분포',
+       y = "Count", 
+       x = "총 자유투 시도 횟수")
+
+#큰 특징은 보이지 않는다
+```
+
+
+##### 자유투 성공 확률
+```{r}
+stat %>% 
+  ggplot(aes(FT.))+
+  geom_histogram(fill = "cornflowerblue", 
+                 color='white',
+                 binwidth = 1)+
+  labs(title='자유투 성공확률 분포',
+       y = "Count", 
+       x = "자유투 성공확률")
+
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(FT.),
+                 color='white',
+                 position='fill',
+                 binwidth = 5,
+                 alpha=.7)+
+  labs(title='포지션 별 자유투 성공확률 분포',
+       y = "Count", 
+       x = "자유투 성공확률")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(FT.),
+                 color='white',
+                 position='stack',
+                 binwidth = 5,
+                 alpha=.7)+
+  labs(title='포지션 별 자유투 성공확률 분포',
+       y = "Count", 
+       x = "자유투 성공확률")
+
+#성공 확률이 0 또는 100의 경우가 꽤 보이는데 이는 시도 횟수가 아예 없거나 적은 경우임을 알 수 있음
+stat %>% 
+  filter(FT.==0 | FT.==100) %>% 
+  select(FTA, FTM) %>% 
+  table()
+```
+
+##### 포지션 별 boxplot(총 자유투 성공 횟수, 시도횟수, 성공확률)
+##### 총 자유투 성공 횟수
+```{r}
+stat %>% 
+  ggplot(aes(x=fct_reorder(Pos, desc(FTM)), 
+             y=FTM, 
+             fill=fct_reorder(Pos, desc(FTM))))+
+  geom_violin(fill='lavender', alpha=.5)+
+  geom_boxplot(width=.5,
+               varwidth = TRUE,
+               alpha=.5)+
+  labs(title='포지션 별 총 자유투 성공 횟수 분포',
+       y='총 자유투 성공 횟수',
+       x='포지션',
+       fill='포지션')
+
+#큰 차이는 없지만 센터와 가드의 경우가 살짝 높은 수치를 보인다
+```
+
+##### 총 자유투 시도 횟수
+```{r}
+stat %>% 
+  ggplot(aes(x = fct_reorder(Pos, desc(FTA)), 
+             y = FTA, 
+             fill = fct_reorder(Pos, desc(FTA))))+
+  geom_violin(fill='lavender', alpha=.5)+
+  geom_boxplot(width=.5,
+               varwidth = TRUE,
+               alpha=.5)+
+  labs(title='포지션 별 총 자유투 시도 횟수 분포',
+       y='총 자유투 시도 횟수',
+       x='포지션',
+       fill='포지션')
+
+#위와 같다
+```
+
+
+##### 자유투 성공 확률
+
+```{r}
+stat %>% 
+  ggplot(aes(x = fct_reorder(Pos, desc(FT.)), 
+             y = FT., 
+             fill = fct_reorder(Pos, desc(FT.))))+
+  geom_violin(fill='lavender', alpha=.5)+
+  geom_boxplot(width=.5,
+               varwidth = TRUE,
+               alpha=.5)+
+  labs(title='포지션 별 자유투 성공 확률 분포',
+       y='자유투 성공 확률',
+       x='포지션',
+       fill='포지션')
+
+#파워 포워드와 센터가 성공확률이 꽤나 낮은 것을 볼 수 있다.
+```
+
+
+#### 1-6) 총 공격 리바운드 횟수, 평균 공격 리바운드 횟수
+
+##### 총 공격 리바운드 횟수
+```{r}
+stat %>% 
+  ggplot(aes(OREB))+
+  geom_histogram(fill = "cornflowerblue", 
+                 color='white',
+                 binwidth = 10)+
+  labs(title='총 공격 리바운드 횟수 분포',
+       y = "Count", 
+       x = "총 공격 리바운드 횟수")
+
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(OREB),
+                 color='white',
+                 position='fill',
+                 binwidth = 100,
+                 alpha=.7)+
+  labs(title='포지션 별 총 공격 리바운드 횟수 분포',
+       y = "Count", 
+       x = "총 공격 리바운드 횟수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(OREB),
+                 color='white',
+                 position='stack',
+                 binwidth = 100,
+                 alpha=.7)+
+  labs(title='포지션 별 총 공격 리바운드 횟수 분포',
+       y = "Count", 
+       x = "총 공격 리바운드 횟수")
+
+#센터와 파워포워드가 높은 수치를 갖는다는 것을 확인
+
+```
+
+##### 평균 공격 리바운드 횟수
+```{r}
+stat %>% 
+  ggplot(aes(OREB.))+
+  geom_histogram(fill = "cornflowerblue", 
+                 color='white',
+                 binwidth = .5)+
+  labs(title='평균 공격 리바운드 횟수 분포',
+       y = "Count", 
+       x = "평균 공격 리바운드 횟수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(OREB.),
+                 color='white',
+                 position='fill',
+                 binwidth = .5,
+                 alpha=.7)+
+  labs(title='포지션 별 평균 공격 리바운드 횟수 분포',
+       y = "Count", 
+       x = "평균 공격 리바운드 횟수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(OREB.),
+                 color='white',
+                 position='stack',
+                 binwidth = .5,
+                 alpha=.7)+
+  labs(title='포지션 별 평균 공격 리바운드 횟수 분포',
+       y = "Count", 
+       x = "평균 공격 리바운드 횟수")
+
+#센터와 파워포워드가 높은 수치를 갖는다
+```
+
+
+##### 포지션 별 boxplot(총 공격 리바운드 횟수, 평균 공격 리바운드 횟수)
+##### 총 공격 리바운드 횟수
+```{r}
+stat %>% 
+  ggplot(aes(x=fct_reorder(Pos, desc(OREB)), 
+             y=OREB, 
+             fill=fct_reorder(Pos, desc(OREB))))+
+  geom_violin(fill='lavender', alpha=.5)+
+  geom_boxplot(width=.5,
+               varwidth = TRUE,
+               alpha=.5)+
+  labs(title='포지션 별 총 공격 리바운드 횟수 분포',
+       y='총 공격 리바운드 횟수',
+       x='포지션',
+       fill='포지션')
+
+#센터와 파워포워드가 높은 수치를 보인다
+```
+
+##### 평균 공격 리바운드 횟수
+```{r}
+stat %>% 
+  ggplot(aes(x = fct_reorder(Pos, desc(OREB.)), 
+             y = OREB., 
+             fill = fct_reorder(Pos, desc(OREB.))))+
+  geom_violin(fill='lavender', alpha=.5)+
+  geom_boxplot(width=.5,
+               varwidth = TRUE,
+               alpha=.5)+
+  labs(title='포지션 별 평균 공격 리바운드 횟수 분포',
+       y='평균 공격 리바운드 횟수',
+       x='포지션',
+       fill='포지션')
+
+#센터와 파워포워드가 높은 수치를 보인다
+```
+
+#### 1-7) 총 수비 리바운드 횟수, 평균 수비 리바운드 횟수
+
+##### 총 수비 리바운드 횟수
+```{r}
+stat %>% 
+  ggplot(aes(DREB))+
+  geom_histogram(fill = "cornflowerblue", 
+                 color='white',
+                 binwidth = 10)+
+  labs(title='총 수비 리바운드 횟수 분포',
+       y = "Count", 
+       x = "총 수비 리바운드 횟수")
+
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(DREB),
+                 color='white',
+                 position='fill',
+                 binwidth = 100,
+                 alpha=.7)+
+  labs(title='포지션 별 총 수비 리바운드 횟수 분포',
+       y = "Count", 
+       x = "총 수비 리바운드 횟수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(DREB),
+                 color='white',
+                 position='stack',
+                 binwidth = 100,
+                 alpha=.7)+
+  labs(title='포지션 별 총 수비 리바운드 횟수 분포',
+       y = "Count", 
+       x = "총 수비 리바운드 횟수")
+
+#센터와 파워포워드가 높은 수치를 갖는다는 것을 확인
+```
+
+##### 평균 수비 리바운드 횟수
+
+```{r}
+stat %>% 
+  ggplot(aes(DREB.))+
+  geom_histogram(fill = "cornflowerblue", 
+                 color='white',
+                 binwidth = .5)+
+  labs(title='평균 수비 리바운드 횟수 분포',
+       y = "Count", 
+       x = "평균 수비 리바운드 횟수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(DREB.),
+                 color='white',
+                 position='fill',
+                 binwidth = .5,
+                 alpha=.7)+
+  labs(title='포지션 별 평균 수비 리바운드 횟수 분포',
+       y = "Count", 
+       x = "평균 수비 리바운드 횟수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(DREB.),
+                 color='white',
+                 position='stack',
+                 binwidth = .5,
+                 alpha=.7)+
+  labs(title='포지션 별 평균 수비 리바운드 횟수 분포',
+       y = "Count", 
+       x = "평균 수비 리바운드 횟수")
+
+#센터와 파워포워드가 높은 수치를 갖는다
+```
+
+##### 포지션 별 boxplot(총 수비 리바운드 횟수, 평균 수비 리바운드 횟수)
+##### 총 수비 리바운드 횟수
+```{r}
+stat %>% 
+  ggplot(aes(x=fct_reorder(Pos, desc(DREB)), 
+             y=DREB, 
+             fill=fct_reorder(Pos, desc(DREB))))+
+  geom_violin(fill='lavender', alpha=.5)+
+  geom_boxplot(width=.5,
+               varwidth = TRUE,
+               alpha=.5)+
+  labs(title='포지션 별 총 수비 리바운드 횟수 분포',
+       y='총 수비 리바운드 횟수',
+       x='포지션',
+       fill='포지션')
+
+#센터와 파워포워드가 높은 수치를 보인다
+```
+
+##### 평균 수비 리바운드 횟수
+```{r}
+stat %>% 
+  ggplot(aes(x = fct_reorder(Pos, desc(DREB.)), 
+             y = DREB., 
+             fill = fct_reorder(Pos, desc(DREB.))))+
+  geom_violin(fill='lavender', alpha=.5)+
+  geom_boxplot(width=.5,
+               varwidth = TRUE,
+               alpha=.5)+
+  labs(title='포지션 별 평균 수비 리바운드 횟수 분포',
+       y='평균 수비 리바운드 횟수',
+       x='포지션',
+       fill='포지션')
+
+#센터와 파워포워드가 높은 수치를 보인다
+```
+
+#### 1-8) 총 어시스트 횟수, 평균 어시스트 횟수
+
+##### 총 어시스트 횟수
+```{r}
+stat %>% 
+  ggplot(aes(AST))+
+  geom_histogram(fill = "cornflowerblue", 
+                 color='white',
+                 binwidth = 20)+
+  labs(title='총 어시스트 횟수 분포',
+       y = "Count", 
+       x = "총 어시스트 횟수")
+
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(AST),
+                 color='white',
+                 position='fill',
+                 binwidth = 40,
+                 alpha=.7)+
+  labs(title='포지션 별 총 어시스트 횟수 분포',
+       y = "Count", 
+       x = "총 어시스트 횟수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(AST),
+                 color='white',
+                 position='stack',
+                 binwidth = 40,
+                 alpha=.7)+
+  labs(title='포지션 별 총 어시스트 횟수 분포',
+       y = "Count", 
+       x = "총 어시스트 횟수")
+
+#포인트 가드가 높은 수치를 포인다
+```
+
+##### 평균 어시스트 횟수
+```{r}
+stat %>% 
+  ggplot(aes(AST.))+
+  geom_histogram(fill = "cornflowerblue", 
+                 color='white',
+                 binwidth = .5)+
+  labs(title='평균 어시스트 횟수 분포',
+       y = "Count", 
+       x = "평균 어시스트 횟수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(AST.),
+                 color='white',
+                 position='fill',
+                 binwidth = .5,
+                 alpha=.7)+
+  labs(title='포지션 별 평균 어시스트 횟수 분포',
+       y = "Count", 
+       x = "평균 어시스트 횟수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(AST.),
+                 color='white',
+                 position='stack',
+                 binwidth = .5,
+                 alpha=.7)+
+  labs(title='포지션 별 평균 어시스트 분포',
+       y = "Count", 
+       x = "평균 어시스트 횟수")
+
+#포인트 가드가 높은 수치를 보인다
+```
+
+##### 포지션 별 boxplot(총 어시스트 횟수, 평균 어시스트 횟수)
+##### 총 어시스트 횟수
+```{r}
+stat %>% 
+  ggplot(aes(x=fct_reorder(Pos, desc(AST)), 
+             y=AST, 
+             fill=fct_reorder(Pos, desc(AST))))+
+  geom_violin(fill='lavender', alpha=.5)+
+  geom_boxplot(width=.5,
+               varwidth = TRUE,
+               alpha=.5)+
+  labs(title='포지션 별 총 어시스트 횟수 분포',
+       y='총 어시스트 횟수',
+       x='포지션',
+       fill='포지션')
+
+#포인트 가드가 매우 높은 수치를 보인다
+```
+
+##### 평균 어시스트 횟수
+```{r}
+stat %>% 
+  ggplot(aes(x = fct_reorder(Pos, desc(AST.)), 
+             y = AST., 
+             fill = fct_reorder(Pos, desc(AST.))))+
+  geom_violin(fill='lavender', alpha=.5)+
+  geom_boxplot(width=.5,
+               varwidth = TRUE,
+               alpha=.5)+
+  labs(title='포지션 별 평균 어시스트 횟수 분포',
+       y='평균 어시스트 횟수',
+       x='포지션',
+       fill='포지션')
+
+#포인트 가드가 매우 높은 수치를  보인다
+```
+
+
+#### 1-9) 총 스틸 횟수, 평균 스틸 횟수
+
+##### 총 스틸 횟수
+
+```{r}
+stat %>% 
+  ggplot(aes(STL))+
+  geom_histogram(fill = "cornflowerblue", 
+                 color='white',
+                 binwidth = 10)+
+  labs(title='총 스틸 횟수 분포',
+       y = "Count", 
+       x = "총 스틸 횟수")
+
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(STL),
+                 color='white',
+                 position='fill',
+                 binwidth = 10,
+                 alpha=.7)+
+  labs(title='포지션 별 총 스틸 횟수 분포',
+       y = "Count", 
+       x = "총 스틸 횟수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(STL),
+                 color='white',
+                 position='stack',
+                 binwidth = 10,
+                 alpha=.7)+
+  labs(title='포지션 별 총 스틸 횟수 분포',
+       y = "Count", 
+       x = "총 스틸 횟수")
+
+#센터나 파워포워드는 높은 수치에는 분포하지 않음을 확인
+
+```
+
+##### 평균 스틸 횟수
+```{r}
+stat %>% 
+  ggplot(aes(STL.))+
+  geom_histogram(fill = "cornflowerblue", 
+                 color='white',
+                 binwidth = .1)+
+  labs(title='평균 스틸 횟수 분포',
+       y = "Count", 
+       x = "평균 스틸 횟수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(STL.),
+                 color='white',
+                 position='fill',
+                 binwidth = .1,
+                 alpha=.7)+
+  labs(title='포지션 별 평균 스틸 횟수 분포',
+       y = "Count", 
+       x = "평균 스틸 횟수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(STL.),
+                 color='white',
+                 position='stack',
+                 binwidth = .1,
+                 alpha=.7)+
+  labs(title='포지션 별 평균 스틸 분포',
+       y = "Count", 
+       x = "평균 스틸 횟수")
+
+#센터나 파워포워드는 높은 수치에는 분포하지 않음을 확인
+```
+
+##### 포지션 별 boxplot(총 스틸 횟수, 평균 스틸 횟수)
+##### 총 스틸 횟수
+```{r}
+stat %>% 
+  ggplot(aes(x=fct_reorder(Pos, desc(STL)), 
+             y=STL, 
+             fill=fct_reorder(Pos, desc(STL))))+
+  geom_violin(fill='lavender', alpha=.5)+
+  geom_boxplot(width=.5,
+               varwidth = TRUE,
+               alpha=.5)+
+  labs(title='포지션 별 총 스틸 횟수 분포',
+       y='총 스틸 횟수',
+       x='포지션',
+       fill='포지션')
+
+#센터와 파워포워드는 비교적 낮은 수치를 보인다
+```
+
+##### 평균 스틸 횟수
+```{r}
+stat %>% 
+  ggplot(aes(x = fct_reorder(Pos, desc(STL.)), 
+             y = STL., 
+             fill = fct_reorder(Pos, desc(STL.))))+
+  geom_violin(fill='lavender', alpha=.5)+
+  geom_boxplot(width=.5,
+               varwidth = TRUE,
+               alpha=.5)+
+  labs(title='포지션 별 평균 스틸 횟수 분포',
+       y='평균 스틸 횟수',
+       x='포지션',
+       fill='포지션')
+
+#센터와 파워포워드는 비교적 낮은 수치를 보인다
+
+```
+
+#### 1-10) 총 블락 횟수, 평균 블락 횟수
+
+##### 총 블락 횟수
+```{r}
+stat %>% 
+  ggplot(aes(BLK))+
+  geom_histogram(fill = "cornflowerblue", 
+                 color='white',
+                 binwidth = 5)+
+  labs(title='총 블락 횟수 분포',
+       y = "Count", 
+       x = "총 블락 횟수")
+
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(BLK),
+                 color='white',
+                 position='fill',
+                 binwidth = 10,
+                 alpha=.7)+
+  labs(title='포지션 별 총 블락 횟수 분포',
+       y = "Count", 
+       x = "총 블락 횟수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(BLK),
+                 color='white',
+                 position='stack',
+                 binwidth = 10,
+                 alpha=.7)+
+  labs(title='포지션 별 총 블락 횟수 분포',
+       y = "Count", 
+       x = "총 블락 횟수")
+
+#가드는 낮은 수치, 센터와 파워 포워드는 높은 수치에 분포함을 확인
+
+```
+
+##### 평균 블락 횟수
+```{r}
+stat %>% 
+  ggplot(aes(BLK.))+
+  geom_histogram(fill = "cornflowerblue", 
+                 color='white',
+                 binwidth = .1)+
+  labs(title='평균 스틸 블락 분포',
+       y = "Count", 
+       x = "평균 블락 횟수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(BLK.),
+                 color='white',
+                 position='fill',
+                 binwidth = .1,
+                 alpha=.7)+
+  labs(title='포지션 별 평균 블락 횟수 분포',
+       y = "Count", 
+       x = "평균 블락 횟수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(BLK.),
+                 color='white',
+                 position='stack',
+                 binwidth = .1,
+                 alpha=.7)+
+  labs(title='포지션 별 평균 블락 분포',
+       y = "Count", 
+       x = "평균 블락 횟수")
+
+#가드는 낮은 수치, 센터와 파워 포워드는 높은 수치에 분포함을 확인
+
+```
+
+
+##### 포지션 별 boxplot(총 블락 횟수, 평균 블락 횟수)
+##### 총 블락 횟수
+```{r}
+stat %>% 
+  ggplot(aes(x=fct_reorder(Pos, desc(BLK)), 
+             y=BLK, 
+             fill=fct_reorder(Pos, desc(BLK))))+
+  geom_violin(fill='lavender', alpha=.5)+
+  geom_boxplot(width=.5,
+               varwidth = TRUE,
+               alpha=.5)+
+  labs(title='포지션 별 총 블락 횟수 분포',
+       y='총 블락 횟수',
+       x='포지션',
+       fill='포지션')
+
+#센터가 매우 높은 수치를 가짐을 확인
+```
+
+
+##### 평균 블락 횟수
+```{r}
+stat %>% 
+  ggplot(aes(x = fct_reorder(Pos, desc(BLK.)), 
+             y = BLK., 
+             fill = fct_reorder(Pos, desc(BLK.))))+
+  geom_violin(fill='lavender', alpha=.5)+
+  geom_boxplot(width=.5,
+               varwidth = TRUE,
+               alpha=.5)+
+  labs(title='포지션 별 평균 블락 횟수 분포',
+       y='평균 블락 횟수',
+       x='포지션',
+       fill='포지션')
+
+#센터가 매우 높은 수치를 가짐을 확인
+```
+
+#### 1-11) 총 턴오버 횟수, 평균 턴오버 횟수
+
+##### 총 턴오버 횟수
+```{r}
+stat %>% 
+  ggplot(aes(TOV))+
+  geom_histogram(fill = "cornflowerblue", 
+                 color='white',
+                 binwidth = 5)+
+  labs(title='총 턴오버 횟수 분포',
+       y = "Count", 
+       x = "총 턴오버 횟수")
+
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(TOV),
+                 color='white',
+                 position='fill',
+                 binwidth = 20,
+                 alpha=.7)+
+  labs(title='포지션 별 총 턴오버 횟수 분포',
+       y = "Count", 
+       x = "총 턴오버 횟수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(TOV),
+                 color='white',
+                 position='stack',
+                 binwidth = 20,
+                 alpha=.7)+
+  labs(title='포지션 별 총 턴오버 횟수 분포',
+       y = "Count", 
+       x = "총 턴오버 횟수")
+
+#가드가 높은 수치, 센터와 파워포워드는 낮은 수치를 가짐을 확인. 하지만 센터는 100~150에서 비교적 높은 비율을 가진다
+```
+
+##### 평균 턴오버 횟수
+```{r}
+stat %>% 
+  ggplot(aes(TOV.))+
+  geom_histogram(fill = "cornflowerblue", 
+                 color='white',
+                 binwidth = .1)+
+  labs(title='평균 스틸 턴오버 분포',
+       y = "Count", 
+       x = "평균 턴오버 횟수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(TOV.),
+                 color='white',
+                 position='fill',
+                 binwidth = .5,
+                 alpha=.7)+
+  labs(title='포지션 별 평균 턴오버 횟수 분포',
+       y = "Count", 
+       x = "평균 턴오버 횟수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(TOV.),
+                 color='white',
+                 position='stack',
+                 binwidth = .5,
+                 alpha=.7)+
+  labs(title='포지션 별 평균 턴오버 분포',
+       y = "Count", 
+       x = "평균 턴오버 횟수")
+
+#가드가 높은 수치, 센터와 파워포워드는 낮은 수치를 가짐을 확인
+```
+
+
+##### 포지션 별 boxplot(총 턴오버 횟수, 평균 턴오버 횟수)
+##### 총 턴오버 횟수
+```{r}
+stat %>% 
+  ggplot(aes(x=fct_reorder(Pos, desc(TOV)), 
+             y=TOV, 
+             fill=fct_reorder(Pos, desc(TOV))))+
+  geom_violin(fill='lavender', alpha=.5)+
+  geom_boxplot(width=.5,
+               varwidth = TRUE,
+               alpha=.5)+
+  labs(title='포지션 별 총 턴오버 횟수 분포',
+       y='총 턴오버 횟수',
+       x='포지션',
+       fill='포지션')
+
+#포인트가드와 센터가 비교적 높은 수치를 가진다
+```
+
+##### 평균 턴오버 횟수
+```{r}
+stat %>% 
+  ggplot(aes(x = fct_reorder(Pos, desc(TOV.)), 
+             y = TOV., 
+             fill = fct_reorder(Pos, desc(TOV.))))+
+  geom_violin(fill='lavender', alpha=.5)+
+  geom_boxplot(width=.5,
+               varwidth = TRUE,
+               alpha=.5)+
+  labs(title='포지션 별 평균 턴오버 횟수 분포',
+       y='평균 턴오버 횟수',
+       x='포지션',
+       fill='포지션')
+
+#포인트가드와 센터 그리고 슈팅가드가 비교적 높은 수치를 가진다
+```
+
+#### 1-12) 총 파울 횟수, 평균 파울 횟수
+
+##### 총 파울 횟수
+```{r}
+stat %>% 
+  ggplot(aes(PF))+
+  geom_histogram(fill = "cornflowerblue", 
+                 color='white',
+                 binwidth = 5)+
+  labs(title='총 파울 횟수 분포',
+       y = "Count", 
+       x = "총 파울 횟수")
+
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(PF),
+                 color='white',
+                 position='fill',
+                 binwidth = 20,
+                 alpha=.7)+
+  labs(title='포지션 별 총 파울 횟수 분포',
+       y = "Count", 
+       x = "총 파울 횟수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(PF),
+                 color='white',
+                 position='stack',
+                 binwidth = 20,
+                 alpha=.7)+
+  labs(title='포지션 별 총 파울 횟수 분포',
+       y = "Count", 
+       x = "총 파울 횟수")
+
+#센터가 비교적 높은 수치에서 분포를 가진다
+```
+
+##### 평균 파울 횟수
+```{r}
+stat %>% 
+  ggplot(aes(PF.))+
+  geom_histogram(fill = "cornflowerblue", 
+                 color='white',
+                 binwidth = .1)+
+  labs(title='평균 스틸 파울 분포',
+       y = "Count", 
+       x = "평균 파울 횟수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(PF.),
+                 color='white',
+                 position='fill',
+                 binwidth = .5,
+                 alpha=.7)+
+  labs(title='포지션 별 평균 파울 횟수 분포',
+       y = "Count", 
+       x = "평균 파울 횟수")
+
+stat %>% 
+  ggplot(aes(fill=Pos))+
+  geom_histogram(aes(PF.),
+                 color='white',
+                 position='stack',
+                 binwidth = .5,
+                 alpha=.7)+
+  labs(title='포지션 별 평균 파울 분포',
+       y = "Count", 
+       x = "평균 파울 횟수")
+
+#센터와 파워포워드가 비교적 높은 수치에서 분포를 가진다
+```
+
+##### 포지션 별 boxplot(총 파울 횟수, 평균 파울 횟수)
+##### 총 파울 횟수
+```{r}
+stat %>% 
+  ggplot(aes(x=fct_reorder(Pos, desc(PF)), 
+             y=PF, 
+             fill=fct_reorder(Pos, desc(PF))))+
+  geom_violin(fill='lavender', alpha=.5)+
+  geom_boxplot(width=.5,
+               varwidth = TRUE,
+               alpha=.5)+
+  labs(title='포지션 별 총 파울 횟수 분포',
+       y='총 파울 횟수',
+       x='포지션',
+       fill='포지션')
+
+#센터와 파워포워드가 비교적 높은 수치를 가진다
+```
+
+##### 평균 파울 횟수
+```{r}
+stat %>% 
+  ggplot(aes(x = fct_reorder(Pos, desc(PF.)), 
+             y = PF., 
+             fill = fct_reorder(Pos, desc(PF.))))+
+  geom_violin(fill='lavender', alpha=.5)+
+  geom_boxplot(width=.5,
+               varwidth = TRUE,
+               alpha=.5)+
+  labs(title='포지션 별 평균 파울 횟수 분포',
+       y='평균 파울 횟수',
+       x='포지션',
+       fill='포지션')
+
+#센터와 파워포워드가 비교적 높은 수치를 보인다
+```
+
+***
+salary와 각 stats 관계
+---
+* **변수별로 특이사항은 살펴보았고 이제 salary를 예측하기 위해 어떠한 변수가 사용되어야할지 사용된다면 어떠한 점을 유의해야할지 알아보기 위해 salary와 stats간의 관계를 시각화하며 살펴보자**
+
+### 2.salary와 stats 간의 관계(포지션별)
+#### 2-1)총 출전 시간, 평균 출전 시간
+
+##### 총 출전 시간
+```{r}
+stat %>% 
+  ggplot(aes(MIN,salary, color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='총 출전 시간과 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "총 출전 시간")+
+  scale_y_continuous(labels = scales::comma)
+
+stat %>% 
+  ggplot(aes(MIN,log(salary), color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='총 출전 시간과 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "총 출전 시간")+
+  scale_y_continuous(labels = scales::comma)
+
+#총 출전 시간과 salary에서 양의 관계를 살펴 볼 수 있다. 포지션 별로도 크게 다르지는 않다. salary에 로그변환을 하면 선형성을 안정적으로 확보할  수 있을 것으로 보인다
+```
+
+###### 평균 출전 시간
+```{r}
+stat %>% 
+  ggplot(aes(MIN.,salary, color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              lty=7,
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='평균 출전 시간과 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "평균 출전 시간")+
+  scale_y_continuous(labels = scales::comma)
+
+stat %>% 
+  ggplot(aes(MIN.,log(salary), color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              lty=7,
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='평균 출전 시간과 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "평균 출전 시간")+
+  scale_y_continuous(labels = scales::comma)
+
+#평균 출전 시간과 salary에서 양의 관계를 볼 수 있다. 포지션 별로도 크게  다르지는 않다. salary에 로그변환을 하면 선형성을 안정적으로 확보할 수 있을 것으로 보인다
+
+```
+
+#### 2-2)총 골 넣은 점수, 평균 골 넣은 점수
+
+#####총 골 넣은 점수
+```{r}
+stat %>% 
+  ggplot(aes(PTS,salary, color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              size=1.2,
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='총 골 넣은 점수과 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "총 골 넣은 점수")+
+  scale_y_continuous(labels = scales::comma)
+
+stat %>% 
+  ggplot(aes(log(PTS+1),log(salary), color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              size=1.2,
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='총 골 넣은 점수과 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "총 골 넣은 점수")+
+  scale_y_continuous(labels = scales::comma)
+
+
+#총 골 넣은 점수와 salary와 양의 상관관계를 보인다. 포지션 별로도  크게 다르지는 않다. 다만 점수가 높아질 수록 퍼지는 정도가 매우 커짐에 이분산성을 유의해야할듯 하다.
+#로그 변환시 안정성이 어느정도 확보된다
+
+```
+
+###### 평균 골 넣은 점수
+```{r}
+stat %>% 
+  ggplot(aes(log(PTS.+1),log(salary), color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='평균 골 넣은 점수와 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "평균 골 넣은 점수")+
+  scale_y_continuous(labels = scales::comma)
+
+#평균 골 넣은 점수와 salary와 양의 상관관계를 보인다. 포지션 별로도  크게 다르지는 않다.
+#로그변환시 안정성이 어느정도 확보된다
+```
+
+#### 2-3)총 2점 슛 성공 횟수,시도 횟수 및 성공 확률
+
+##### 총 2점 슛 성공 횟수
+```{r}
+stat %>% 
+  ggplot(aes(FGM, salary, color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='총 2점 슛 성공 횟수과 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "총 2점 슛 성공 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+stat %>% 
+  ggplot(aes(FGM, log(salary), color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='총 2점 슛 성공 횟수과 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "총 2점 슛 성공 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+#총 2점 슛  성공 횟수와 salary와의 관계는 양의 상관관계를 보인다. 포지션별로도 크게 다르지 않으나 센터와 스몰포워드의 경우 끝 선에서 굉장이 다이나믹하게 움직이는데 이는 성공 횟수가 많은 곳에는 이들이 매우 적게 분포하기 때문이다.
+
+```
+
+###### 총 2점 슛 시도 횟수
+```{r}
+stat %>% 
+  ggplot(aes(FGA,salary, color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='총 2점 슛 시도 횟수와 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "총 2점 슛 시도 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+stat %>% 
+  ggplot(aes(FGA,log(salary), color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='총 2점 슛 시도 횟수와 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "총 2점 슛 시도 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+
+#총 2점 슛 시도 횟수와 salary와의 관계는 양의 상관관계를 보인다. 포지션별로도 크게 다르지 않으나 센터의 경우 위와 같이 횟수가 많은 쪽에는 매우 적게 분포하여 선의 휜 것을 살펴볼  수 있다
+```
+
+###### 2점슛 성공 확률
+```{r}
+stat %>% 
+  ggplot(aes(FG.,salary, color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              lty=7,
+              se=FALSE, 
+              span=5,
+              size=1.2)+
+  labs(title='2점슛 성공 확률과 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "2점슛 성공 확률")+
+  scale_y_continuous(labels = scales::comma)
+
+#음의 상관관계는 아니지만 linear model에 넣기에는 부적합해 보인다
+cor(stat$FG.,stat$salary)
+cor(stat$FG.,log2(stat$salary))
+
+stat %>% 
+  ggplot(aes(FG.,log2(salary), color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              lty=7,
+              se=FALSE, 
+              span=5,
+              size=1.2)+
+  labs(title='2점슛 성공 확률과 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "2점슛 성공 확률")+
+  scale_y_continuous(labels = scales::comma)
+
+#로그변환을 통해서 상관계수를 높일 수는 있으나 그래프에서 원형이 나타나 linear model에는 부적합해 보인다
+```
+
+
+#### 2-4)총 3점 슛 성공 횟수,시도 횟수 및 성공 확률
+
+##### 총 3점 슛 성공 횟수
+```{r}
+stat %>% 
+  ggplot(aes(X3PM, salary, color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='총 3점 슛 성공 횟수과 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "총 3점 슛 성공 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+stat %>% 
+  ggplot(aes(X3PM, log(salary), color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='총 3점 슛 성공 횟수과 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "총 3점 슛 성공 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+
+#센터와 파워포워드의 경우 0에 가까운 곳에 굉장히 많이 분포한다. 하지만 나머지 포지션의 경우는 어느정도 양의 상관관계를 보인다. 전체적으로 봤을 때는 양의 상관관계라고 하기에 애매해서 main effect는 필요없으나 interaction term은 필요한 특이한 케이스 일지도 모른다는 걸 시사한다.
+```
+
+
+###### 총 3점 슛 시도 횟수
+```{r}
+stat %>% 
+  ggplot(aes(X3PA,salary, color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='총 3점 슛 시도 횟수와 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "총 3점 슛 시도 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+stat %>% 
+  ggplot(aes(X3PA,log(salary), color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='총 3점 슛 시도 횟수와 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "총 3점 슛 시도 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+#위와 비슷한 결과가 나왔다
+```
+
+
+###### 3점슛 성공 확률
+```{r}
+stat %>% 
+  ggplot(aes(X3P.,salary, color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              lty=7,
+              se=FALSE, 
+              span=5,
+              size=1.2)+
+  labs(title='3점슛 성공 확률과 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "3점슛 성공 확률")+
+  scale_y_continuous(labels = scales::comma)
+
+#0에 분포하는 경우가 굉장히 많으며 3점슛 성공확률과 salary간에 상관관계가 있다고 하기는 어렵다.
+```
+
+#### 2-5)총 자유투 성공 횟수,시도 횟수 및 성공 확률
+
+##### 총 자유투 성공 횟수
+```{r}
+stat %>% 
+  ggplot(aes(FTM, salary, color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='총 자유투 성공 횟수과 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "총 자유투 성공 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+stat %>% 
+  ggplot(aes(log(FTM), log(salary), color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='총 자유투 성공 횟수과 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "총 자유투 성공 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+#어느정도 자유투 성공횟수와 salary에는 양의 상관관계를 보인다.다만 이분산성이 크게 나타난다. 포지션 별로 크게 다르지 않다
+#로그변환을 통해 안정화 할 수 있다. 
+
+
+```
+
+###### 총 자유투 시도 횟수
+```{r}
+stat %>% 
+  ggplot(aes(FTA,salary, color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='총 자유투 시도 횟수와 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "총 자유투 시도 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+stat %>% 
+  ggplot(aes(log(FTA),log(salary), color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='총 자유투 시도 횟수와 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "총 자유투 시도 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+
+#어느정도 자유투 성공횟수와 salary에는 양의 상관관계를 보인다.다만 이분산성이 크게 나타난다. 포지션 별로 크게  다르지 않다
+#로그변환을 통해 안정화 할 수 있다. 
+```
+
+###### 자유투 성공 확률
+```{r}
+stat %>% 
+  ggplot(aes(FT.,salary, color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              lty=7,
+              se=FALSE, 
+              span=5,
+              size=1.2)+
+  labs(title='자유투 성공 확률과 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "자유투 성공 확률")+
+  scale_y_continuous(labels = scales::comma)
+
+#자유투 성공 확률과 salary와 상관관계가 있다고 하기는 어렵다
+```
+
+#### 2-6)총 공격 리바운드 횟수, 평균 공격 리바운드 횟수
+
+##### 총 공격 리바운드 횟수
+```{r}
+stat %>% 
+  ggplot(aes(OREB,salary, color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              size=1.2,
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='총 공격 리바운드 횟수 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "총 공격 리바운드 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+stat %>% 
+  ggplot(aes(log(OREB+1),log(salary), color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              size=1.2,
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='총 공격 리바운드 횟수 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "총 공격 리바운드 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+
+
+#센터와 파워포워드의 경우 어느 정도 양의 상관관계를 보이나 이분상성이 매우 크다
+#로그변환으로 안정성을 어느 정도 확보 할 수 있다
+
+```
+
+###### 평균 공격 리바운드 횟수
+```{r}
+stat %>% 
+  ggplot(aes(OREB.,salary, color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='평균 공격 리바운드 횟수와 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "평균 공격 리바운드 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+stat %>% 
+  ggplot(aes(log(OREB.+1),log(salary), color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='평균 공격 리바운드 횟수와 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "평균 공격 리바운드 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+
+#평균 공격 리바운드 횟수와 salary 와는 정말 약한 양의 상관관계를 보인다고 할 수는 있으나 이분산성이 매우 크다. 또한 포지션별로 상이한 모습을 보인다
+#로그변환으로 어느정도 안정성을 확보할 수 있다
+
+```
+
+#### 2-7)총 수비 리바운드 횟수, 평균 수비 리바운드 횟수
+
+##### 총 수비 리바운드 횟수
+```{r}
+stat %>% 
+  ggplot(aes(DREB,salary, color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              size=1.2,
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='총 수비 리바운드 횟수 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "총 수비 리바운드 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+stat %>% 
+  ggplot(aes(log(DREB+1),log(salary), color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              size=1.2,
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='총 수비 리바운드 횟수 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "총 수비 리바운드 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+
+
+#어느 정도 양의 상관관계를 보이나 이분상성이 매우 크다. 포지션 별로 기울기가 다른 것을 확인
+#로그변환으로 안정성을 어느 정도 확보 할 수 있다
+
+```
+
+###### 평균 수비 리바운드 횟수
+
+```{r}
+stat %>% 
+  ggplot(aes(DREB.,salary, color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='평균 수비 리바운드 횟수와 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "평균 수비 리바운드 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+stat %>% 
+  ggplot(aes(log(DREB.+1),log(salary), color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='평균 수비 리바운드 횟수와 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "평균 수비 리바운드 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+
+#평균 수비 리바운드 횟수와 salary 와는 양의 상관관계를 보인다고 할 수는 있으나 이분산성이 매우 크다. 포지션별로 기울기가 다른 것을 확인.
+#로그변환으로 어느정도 안정성을 확보할 수 있다
+
+```
+
+#### 2-8)총 어시스트 횟수, 평균 어시스트 횟수
+
+##### 총 어시스트 횟수
+```{r}
+stat %>% 
+  ggplot(aes(AST,salary, color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              size=1.2,
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='총 어시스트 횟수 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "총 어시스트 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+stat %>% 
+  ggplot(aes(log(AST+1),log(salary), color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              size=1.2,
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='총 어시스트 횟수 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "총 어시스트 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+#어느 정도 양의 상관관계를 보이나 이분상성이 매우 크다. 포지션 별로 분포가 상이하다.
+#로그변환으로 안정성을 어느 정도 확보 할 수 있다
+```
+
+###### 평균 어시스트 횟수
+```{r}
+stat %>% 
+  ggplot(aes(AST.,salary, color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='평균 어시스트 횟수와 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "평균 어시스트 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+stat %>% 
+  ggplot(aes(log(AST.+1),log(salary), color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='평균 어시스트와 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "평균 어시스트 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+#어느 정도 양의 상관관계를 보이나 이분상성이 매우 크다. 포지션 별로도 상이함을 볼 수 있다
+#로그변환으로 안정성을 어느 정도 확보 할 수 있다
+```
+
+#### 2-9)총 스틸 횟수, 평균 스틸 횟수
+
+##### 총 스틸 횟수
+```{r}
+stat %>% 
+  ggplot(aes(STL,salary, color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              size=1.2,
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='총 스틸 횟수 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "총 스틸 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+stat %>% 
+  ggplot(aes(log(STL+1),log(salary), color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              size=1.2,
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='총 스틸 횟수 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "총 스틸 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+#어느 정도 양의 상관관계를 보이나 이분상성이 매우 크다. 포지션 별로 조금 상이함을 보인다
+#로그변환으로 안정성을 어느 정도 확보 할 수 있다
+
+```
+
+###### 평균 스틸 횟수
+```{r}
+stat %>% 
+  ggplot(aes(STL.,salary, color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='평균 스틸 횟수와 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "평균 스틸 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+stat %>% 
+  ggplot(aes(log(STL.+1),log(salary), color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='평균 스틸와 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "평균 스틸 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+#어느 정도 양의 상관관계를 보이나 이분상성이 매우 크다. 포지션 별로도 조금 상이함을 볼 수 있다
+#로그변환으로 안정성을 어느 정도 확보 할 수 있다
+
+```
+
+#### 2-10)총 블락 횟수, 평균 블락 횟수
+
+##### 총 블락 횟수
+```{r}
+stat %>% 
+  ggplot(aes(BLK,salary, color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              size=1.2,
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='총 블락 횟수 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "총 블락 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+stat %>% 
+  ggplot(aes(log(BLK+1),log(salary), color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              size=1.2,
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='총 블락 횟수 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "총 블락 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+#어느 정도 양의 상관관계를 보이나 이분상성이 매우 크다. 센터와 파워 포워드의 경우가 높은 수치에 분포함을 확인할 수 있다
+#로그변환으로 안정성을 어느 정도 확보 할 수 있다
+```
+
+###### 평균 블락 횟수
+```{r}
+stat %>% 
+  ggplot(aes(BLK.,salary, color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='평균 블락 횟수와 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "평균 블락 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+stat %>% 
+  ggplot(aes(log(BLK.+1),log(salary), color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='평균 블락와 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "평균 블락 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+#어느 정도 양의 상관관계를 보이나 이분상성이 매우 크다. 포지션 별로도 상이함을 볼 수 있다
+#로그변환으로 안정성을 어느 정도 확보 할 수 있다
+
+```
+
+
+#### 2-11)총 턴오버 횟수, 평균 턴오버 횟수
+
+##### 총 턴오버 횟수
+```{r}
+stat %>% 
+  ggplot(aes(TOV,salary, color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              size=1.2,
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='총 턴오버 횟수 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "총 턴오버 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+stat %>% 
+  ggplot(aes(log(TOV+1),log(salary), color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              size=1.2,
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='총 턴오버 횟수 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "총 턴오버 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+#어느 정도 양의 상관관계를 보이나 이분상성이 매우 크다. 포지션 별로 크게 다르지 않다 
+#로그변환으로 안정성을 어느 정도 확보 할 수 있다
+```
+
+###### 평균 턴오버 횟수
+```{r}
+stat %>% 
+  ggplot(aes(TOV.,salary, color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='평균 턴오버 횟수와 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "평균 턴오버 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+stat %>% 
+  ggplot(aes(log(TOV.+1),log(salary), color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='평균 턴오버와 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "평균 턴오버 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+#어느 정도 양의 상관관계를 보이나 이분상성이 크다. 포지션 별로 기울기는 크게 다르지는 않지만 위치가 조금 다르다.
+#로그변환으로 안정성을 어느 정도 확보 할 수 있다
+
+```
+
+#### 2-12)총 파울 횟수, 평균 파울 횟수
+
+##### 총 파울 횟수
+```{r}
+stat %>% 
+  ggplot(aes(PF,salary, color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              size=1.2,
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='총 파울 횟수 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "총 파울 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+stat %>% 
+  ggplot(aes(PF,log(salary), color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              size=1.2,
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='총 파울 횟수 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "총 파울 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+
+#어느 정도 양의 상관관계를 보이나 이분상성이 매우 크다. 포지션 별로 크게 다르지 않다 
+#로그변환으로 안정성을 어느 정도 확보 할 수 있다
+```
+
+###### 평균 파울 횟수
+```{r}
+stat %>% 
+  ggplot(aes(PF.,salary, color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='평균 파울 횟수와 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "평균 파울 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+stat %>% 
+  ggplot(aes(log(PF.+1),log(salary), color=Pos))+
+  geom_point(alpha=.4,
+             size=3)+
+  geom_smooth(method='loess',
+              se=FALSE, 
+              span=.7,
+              size=1.2)+
+  labs(title='평균 파울와 salary와의 관계(포지션별)',
+       y = "salary", 
+       x = "평균 파울 횟수")+
+  scale_y_continuous(labels = scales::comma)
+
+#어느 정도 양의 상관관계를 보이나 이분상성이 크고 원형에 가깝다. 포지션 별로 크게 다르지 않다
+#로그변환으로 안정성을 어느 정도 확보 할 수 있으나 linear model에는 적합하지 않다고 판단한다.
+```
+
+***
+Modeling
+---
+* **앞선 과정에서 각 변수들과 salary의 관계를 살펴보고 linear model을 생성하기 위해 변수변환과 포지션과의 interaction term이 필요함을 알 수 있었다. 또한 salary와 관계가 없다고 판단한 변수도 존재했다. 따라서 필요없는 변수는 제외하고서 main effect model과  interaction term 을 추가한 model을 비교해본다. modeling에서 제외한 변수들은 비교하는 분석에서도  제외한다. 필요한 변수는 로그변환을 수행했다**
+
+* **modeling에서 제외한 변수 : 2점슛 성공확롤, 3점슛 성공확률, 자유투 성공확률, 평균 파울 횟수**
+
+#### Modeling
+```{r}
+mod1=lm(log(salary) ~ MIN+MIN.+log(PTS+1)+PTS.+FGM+FGA+X3PM+X3PA+
+          log(FTM+1)+log(FTA+1)+log(OREB+1)+log(OREB.+1)+
+          log(DREB+1)+log(DREB.+1)+log(AST+1)+log(AST.+1)+
+          log(STL+1)+log(STL.+1)+log(BLK+1)+log(BLK.+1)+
+          log(TOV+1)+log(TOV.+1)+PF+Pos,
+        data=stat)
+
+mod2=lm(log(salary) ~ (MIN+MIN.+log(PTS+1)+PTS.+FGM+FGA+X3PM+X3PA+
+                       log(FTM+1)+log(FTA+1)+log(OREB+1)+
+                       log(OREB.+1)+log(DREB+1)+log(DREB.+1)+
+                       log(AST+1)+log(AST.+1)+log(STL+1)+
+                       log(STL.+1)+log(BLK+1)+log(BLK.+1)+
+                       log(TOV+1)+log(TOV.+1)+PF)*Pos+Pos,
+        data=stat)
+
+stat_mod=stat %>% 
+  gather_residuals('without interaction'=mod1, 
+                   'within interaction'=mod2)
+
+summary(mod1) #R-squared = 0.5198
+summary(mod2) #R-squared = 0.6962
+#interaction term이 있는 model이 그러지 않는 것보다 전체 변동을 17.64% 더 잘 설명한다.
+```
+
+* **interaction term의 유무로 modeling을 진행했고 이를 통해 각 변수와 잔차와의 관계로 유의미한 modeling을 진행했는지 살펴보자**
+
+### 3.잔차와 각 변수 관계
+#### 3-1)총 출전 시간, 평균 출전 시간
+##### 총 출전 시간
+```{r}
+stat_mod %>% 
+  ggplot(aes(MIN, resid, color=Pos))+
+  geom_point(alpha=.4,
+             size=2.3)+
+  geom_smooth(se=FALSE,
+              size=1,
+              method='loess',
+              span=1)+
+  facet_wrap(~model)+
+  labs(title='총 출전 시간과 잔차, model 간 비교',
+       y = "잔차", 
+       x = "총 출전 시간")
+```
+
+#### 평균 출전 시간
+```{r}
+stat_mod %>% 
+  ggplot(aes(MIN., resid, color=Pos))+
+  geom_point(alpha=.4,
+             size=2.3)+
+  geom_smooth(se=FALSE,
+              size=1,
+              method='loess',
+              span=1)+
+  facet_wrap(~model)+
+  labs(title='평균 출전 시간과 잔차, model 간 비교',
+       y = "잔차", 
+       x = "평균 출전 시간")
+
+#interaction term이 있는 쪽이 확실히 잔차의 안정성이 높고 둘다 무작위성이 잘 보여지므로 model이 잘 생성되었음을 알 수  있다. 또한 interaction term이 없는 쪽에서는 포지션 별로 보면 패턴이 조금 나타남을 알 수 있다.
+```
+
+#### 3-2)총 골 넣은 점수, 평균 골 넣은 점수
+##### 총 골 넣은 점수
+```{r}
+stat_mod %>% 
+  ggplot(aes(PTS, resid, color=Pos))+
+  geom_point(alpha=.4,
+             size=2.3)+
+  geom_smooth(se=FALSE,
+              size=1,
+              method='loess',
+              span=1)+
+  facet_wrap(~model)+
+  labs(title='총 골 넣은 점수와 잔차, model 간 비교',
+       y = "잔차", 
+       x = "총 골 넣은 점수")
+```
+
+#### 평균 골 넣은 점수
+```{r}
+stat_mod %>% 
+  ggplot(aes(PTS., resid, color=Pos))+
+  geom_point(alpha=.4,
+             size=2.3)+
+  geom_smooth(se=FALSE,
+              size=1,
+              method='loess',
+              span=1)+
+  facet_wrap(~model)+
+  labs(title='평균 골 넣은 점수와 잔차, model 간 비교',
+       y = "잔차", 
+       x = "평균 골 넣은 점수")
+
+#잔차의 이분산성이 조금 보이나 제외하고, interaction term이 있는 쪽이 잔차의 안정성이 높고 interaction term이 없는 쪽에서는 포지션 간 패턴이 조금 보인다
+```
+
+#### 3-3)총 2점 슛 성공 횟수,시도 횟수
+##### 총 2점 슛 성공 횟수
+```{r}
+stat_mod %>% 
+  ggplot(aes(FGM, resid, color=Pos))+
+  geom_point(alpha=.4,
+             size=2.3)+
+  geom_smooth(se=FALSE,
+              size=1,
+              method='loess',
+              span=1)+
+  facet_wrap(~model)+
+  labs(title='총 2점 슛 성공 횟수와 잔차, model 간 비교',
+       y = "잔차", 
+       x = "총 2점 슛 성공 횟수")
+```
+
+#### 총 2점 슛 시도 횟수
+```{r}
+stat_mod %>% 
+  ggplot(aes(FGA, resid, color=Pos))+
+  geom_point(alpha=.4,
+             size=2.3)+
+  geom_smooth(se=FALSE,
+              size=1,
+              method='loess',
+              span=1)+
+  facet_wrap(~model)+
+  labs(title='총 2점 슛 시도 횟수와 잔차, model 간 비교',
+       y = "잔차", 
+       x = "총 2점 슛 시도 횟수")
+
+#잔차의 이분산성이 조금 보이나 제외하고, interaction term이 있는 쪽이 잔차의 안정성이 높고 interaction term이 없는 쪽에서는 포지션 간 패턴이 아주 조금 보이지만 무시해도 될 정도로 보인다.
+
+```
+
+#### 3-4)총 3점 슛 성공 횟수,시도 횟수
+##### 총 3점 슛 성공 횟수
+```{r}
+stat_mod %>% 
+  ggplot(aes(X3PM, resid, color=Pos))+
+  geom_point(alpha=.4,
+             size=2.3)+
+  geom_smooth(se=FALSE,
+              size=1,
+              method='loess',
+              span=1)+
+  facet_wrap(~model)+
+  labs(title='총 3점 슛 성공 횟수와 잔차, model 간 비교',
+       y = "잔차", 
+       x = "총 3점 슛 성공 횟수")
+```
+
+#### 총 3점 슛 시도 횟수
+```{r}
+stat_mod %>% 
+  ggplot(aes(X3PA, resid, color=Pos))+
+  geom_point(alpha=.4,
+             size=2.3)+
+  geom_smooth(se=FALSE,
+              size=1,
+              method='loess',
+              span=1)+
+  facet_wrap(~model)+
+  labs(title='총 3점 슛 시도 횟수와 잔차, model 간 비교',
+       y = "잔차", 
+       x = "총 3점 슛 시도 횟수")
+
+#잔차의 이분산성이 보이나 제외하고, interaction term이 있는 쪽이 잔차의 안정성이 높은 것을 확인할 수 있다. 잔차의 무작위성도 어느만큼 나타난다.
+
+```
+
+
+#### 3-5)총 자유투 성공 횟수,시도 횟수
+##### 총 자유투 성공 횟수
+```{r}
+stat_mod %>% 
+  ggplot(aes(log(FTM+1), resid, color=Pos))+
+  geom_point(alpha=.4,
+             size=2.3)+
+  geom_smooth(se=FALSE,
+              size=1,
+              method='loess',
+              span=1)+
+  facet_wrap(~model)+
+  labs(title='총 자유투 성공 횟수와 잔차, model 간 비교',
+       y = "잔차", 
+       x = "총 자유투 성공 횟수(log)")
+
+```
+
+#### 총 자유투 시도 횟수
+```{r}
+stat_mod %>% 
+  ggplot(aes(log(FTA+1), resid, color=Pos))+
+  geom_point(alpha=.4,
+             size=2.3)+
+  geom_smooth(se=FALSE,
+              size=1,
+              method='loess',
+              span=1)+
+  facet_wrap(~model)+
+  labs(title='총 자유투 시도 횟수와 잔차, model 간 비교',
+       y = "잔차", 
+       x = "총 자유투 시도 횟수(log)")
+
+#interaction term이 있는 쪽이 잔차의 안정성이 높은 것을 확인할 수 있다. 무작위성도 잘 보여주어 model이 잘 생성되었다고 판단.
+```
+
+#### 3-6)총 공격 리바운드 횟수, 평균 공격 리바운드 횟수
+##### 총 공격 리바운드 횟수
+```{r}
+stat_mod %>% 
+  ggplot(aes(log(OREB+1), resid, color=Pos))+
+  geom_point(alpha=.4,
+             size=2.3)+
+  geom_smooth(se=FALSE,
+              size=1,
+              method='loess',
+              span=1)+
+  facet_wrap(~model)+
+  labs(title='총 공격 리바운드 횟수와 잔차, model 간 비교',
+       y = "잔차", 
+       x = "총 공격 리바운드 횟수(log)")
+```
+
+#### 평균 공격 리바운드 횟수
+```{r}
+stat_mod %>% 
+  ggplot(aes(log(OREB.+1), resid, color=Pos))+
+  geom_point(alpha=.4,
+             size=2.3)+
+  geom_smooth(se=FALSE,
+              size=1,
+              method='loess',
+              span=1)+
+  facet_wrap(~model)+
+  labs(title='평균 공격 리바운드 횟수와 잔차, model 간 비교',
+       y = "잔차", 
+       x = "평균 공격 리바운드 횟수(log)")
+
+#interaction term이 있는 쪽이 잔차의 안정성이 높은 것을 확인할 수 있다. 무작위성도 잘 보여주어 model이 잘 생성되었다고 판단.
+```
+
+#### 3-7)총 수비 리바운드 횟수, 평균 수비 리바운드 횟수
+##### 총 수비 리바운드 횟수
+```{r}
+stat_mod %>% 
+  ggplot(aes(log(DREB+1), resid, color=Pos))+
+  geom_point(alpha=.4,
+             size=2.3)+
+  geom_smooth(se=FALSE,
+              size=1,
+              method='loess',
+              span=1)+
+  facet_wrap(~model)+
+  labs(title='총 수비 리바운드 횟수와 잔차, model 간 비교',
+       y = "잔차", 
+       x = "총 수비 리바운드 횟수(log)")
+
+```
+
+#### 평균 수비 리바운드 횟수
+```{r}
+stat_mod %>% 
+  ggplot(aes(log(DREB.+1), resid, color=Pos))+
+  geom_point(alpha=.4,
+             size=2.3)+
+  geom_smooth(se=FALSE,
+              size=1,
+              method='loess',
+              span=1)+
+  facet_wrap(~model)+
+  labs(title='평균 수비 리바운드 횟수와 잔차, model 간 비교',
+       y = "잔차", 
+       x = "평균 수비 리바운드 횟수(log)")
+
+#interaction term이 있는 쪽이 잔차의 안정성이 높은 것을 확인할 수 있다. 포지션 마다 살짝 패턴이 보이지만 무시해도 될 정도라고 판단.
+```
+
+
+#### 3-8)총 어시스트 횟수, 평균 어시스트 횟수
+##### 총 어시스트 횟수
+```{r}
+stat_mod %>% 
+  ggplot(aes(log(AST+1), resid, color=Pos))+
+  geom_point(alpha=.4,
+             size=2.3)+
+  geom_smooth(se=FALSE,
+              size=1,
+              method='loess',
+              span=1)+
+  facet_wrap(~model)+
+  labs(title='총 어시스트 횟수와 잔차, model 간 비교',
+       y = "잔차", 
+       x = "총 어시스트 횟수(log)")
+```
+
+#### 평균 어시스트 횟수
+```{r}
+stat_mod %>% 
+  ggplot(aes(log(AST.+1), resid, color=Pos))+
+  geom_point(alpha=.4,
+             size=2.3)+
+  geom_smooth(se=FALSE,
+              size=1,
+              method='loess',
+              span=1)+
+  facet_wrap(~model)+
+  labs(title='평균 어시스트 횟수와 잔차, model 간 비교',
+       y = "잔차", 
+       x = "평균 어시스트 횟수(log)")
+
+#interaction term이 있는 쪽이 잔차의 안정성이 높은 것을 확인할 수 있다. 무작위성도 잘 보여주어 model이 잘 생성되었다고 판단.
+
+```
+
+#### 3-9)총 스틸 횟수, 평균 스틸 횟수
+##### 총 스틸 횟수
+```{r}
+stat_mod %>% 
+  ggplot(aes(log(STL+1), resid, color=Pos))+
+  geom_point(alpha=.4,
+             size=2.3)+
+  geom_smooth(se=FALSE,
+              size=1,
+              method='loess',
+              span=1)+
+  facet_wrap(~model)+
+  labs(title='총 스틸 횟수와 잔차, model 간 비교',
+       y = "잔차", 
+       x = "총 스틸 횟수(log)")
+```
+
+#### 평균 스틸 횟수
+```{r}
+stat_mod %>% 
+  ggplot(aes(log(STL.+1), resid, color=Pos))+
+  geom_point(alpha=.4,
+             size=2.3)+
+  geom_smooth(se=FALSE,
+              size=1,
+              method='loess',
+              span=1)+
+  facet_wrap(~model)+
+  labs(title='평균 스틸 횟수와 잔차, model 간 비교',
+       y = "잔차", 
+       x = "평균 스틸 횟수(log)")
+
+#interaction term이 있는 쪽이 잔차의 안정성이 높은 것을 확인할 수 있다. 무작위성도 잘 보여주어 model이 잘 생성되었다고 판단.
+```
+
+#### 3-10)총 블락 횟수, 평균 블락 횟수
+##### 총 블락 횟수
+```{r}
+stat_mod %>% 
+  ggplot(aes(log(BLK+1), resid, color=Pos))+
+  geom_point(alpha=.4,
+             size=2.3)+
+  geom_smooth(se=FALSE,
+              size=1,
+              method='loess',
+              span=1)+
+  facet_wrap(~model)+
+  labs(title='총 블락 횟수와 잔차, model 간 비교',
+       y = "잔차", 
+       x = "총 블락 횟수(log)")
+```
+
+#### 평균 블락 횟수
+```{r}
+stat_mod %>% 
+  ggplot(aes(log(BLK.+1), resid, color=Pos))+
+  geom_point(alpha=.4,
+             size=2.3)+
+  geom_smooth(se=FALSE,
+              size=1,
+              method='loess',
+              span=1)+
+  facet_wrap(~model)+
+  labs(title='평균 블락 횟수와 잔차, model 간 비교',
+       y = "잔차", 
+       x = "평균 블락 횟수(log)")
+
+#interaction term이 있는 쪽이 잔차의 안정성이 높은 것을 확인할 수 있다. 무작위성도 잘 보여주어 model이 잘 생성되었다고 판단. interaction term 이 없을 때는 포지션간 기울기가 조금 다른 것을 확인.
+```
+
+
+
+#### 3-11)총 턴오버 횟수, 평균 턴오버 횟수
+##### 총 턴오버 횟수
+```{r}
+stat_mod %>% 
+  ggplot(aes(log(TOV+1), resid, color=Pos))+
+  geom_point(alpha=.4,
+             size=2.3)+
+  geom_smooth(se=FALSE,
+              size=1,
+              method='loess',
+              span=1)+
+  facet_wrap(~model)+
+  labs(title='총 턴오버 횟수와 잔차, model 간 비교',
+       y = "잔차", 
+       x = "총 턴오버 횟수(log)")
+```
+
+#### 평균 턴오버 횟수
+```{r}
+stat_mod %>% 
+  ggplot(aes(log(TOV.+1), resid, color=Pos))+
+  geom_point(alpha=.4,
+             size=2.3)+
+  geom_smooth(se=FALSE,
+              size=1,
+              method='loess',
+              span=1)+
+  facet_wrap(~model)+
+  labs(title='평균 턴오버 횟수와 잔차, model 간 비교',
+       y = "잔차", 
+       x = "평균 턴오버 횟수(log)")
+
+#interaction term이 있는 쪽이 잔차의 안정성이 높은 것을 확인할 수 있다. 무작위성도 잘 보여주어 model이 잘 생성되었다고 판단.
+```
+
+#### 3-12)총 파울 횟수
+##### 총 파울 횟수
+```{r}
+stat_mod %>% 
+  ggplot(aes(PF, resid, color=Pos))+
+  geom_point(alpha=.4,
+             size=2.3)+
+  geom_smooth(se=FALSE,
+              size=1,
+              method='loess',
+              span=1)+
+  facet_wrap(~model)+
+  labs(title='총 파울 횟수와 잔차, model 간 비교',
+       y = "잔차", 
+       x = "총 파울 횟수(log)")
+
+#interaction term이 있는 쪽이 잔차의 안정성이 높은 것을 확인할 수 있다. 무작위성도 잘 보여주어 model이 잘 생성되었다고 판단.
+```
+
+
+* **interaction term을 추가 했을 때 잔차의 안정성이 더 좋아지며 interaction term이 없는 model에서 보이는 패턴 또한 잡아낼 수 있다는 것을 살펴 보았다. 추가적으로 스탯마다 interaction term이 필요한 것도 있고 없는 것도 있는데 이 또한 추가적으로 분석해보았으면 좋았을 거 같다. 또한 포지션에 따라서 각 스탯에 차이가 있는 것과 없는 것 또한 EDA에서 발견 되었는데 이 또한 추가적으로 분석해보았으면 좋았을 거 같다. 마지막으로 salary를 예측하는 주요한 변수들을 살펴보면 거의 다 출전 시간이 많으면 자연스럽게 높아지는 관계임을 알 수 있다. 하지만 포지션 별로 상이한 스탯을 가지는 사실이 더 중요하여 이를 중심으로 분석을 진행했다**
+
+* **대표적으로 포지션에 따라 상이한 분포를 나타내는 총 블락횟수를 확인해보며 본 분석을 마무리 한다**
+```{r}
+mod_BLK1=lm(BLK~Pos, data=stat)
+mod_BLK2=lm(BLK~Pos+MIN, data=stat)
+mod_BLK3=lm(BLK~Pos*MIN, data=stat)
+
+p1=stat %>% 
+  ggplot(aes(x = fct_reorder(Pos, desc(BLK)), 
+             y = BLK, 
+             fill = fct_reorder(Pos, desc(BLK))))+
+  geom_violin(fill='lavender', alpha=.5)+
+  geom_boxplot(width=.5,
+               varwidth = TRUE,
+               alpha=.5)+
+    labs(title='포지션 별 블락 횟수 분포',
+         y='총 블락 횟수',
+         x='포지션',
+         fill='포지션')
+  
+
+p2=stat %>%
+  gather_residuals(mod_BLK1) %>% 
+  ggplot(aes(x = fct_reorder(Pos, desc(resid)), 
+             y = resid, 
+             fill = fct_reorder(Pos, desc(resid))))+
+  geom_violin(fill='lavender', alpha=.5)+
+  geom_boxplot(width=.5,
+               varwidth = TRUE,
+               alpha=.5)+
+  labs(title='포지션 별 블락 횟수 분포(포지션만 고려)',
+       y='총 블락 횟수(포지션만 고려)',
+       x='포지션',
+       fill='포지션')
+
+p3=stat %>%
+  gather_residuals(mod_BLK2) %>% 
+  ggplot(aes(x = fct_reorder(Pos, desc(resid)), 
+             y = resid, 
+             fill = fct_reorder(Pos, desc(resid))))+
+  geom_violin(fill='lavender', alpha=.5)+
+  geom_boxplot(width=.5,
+               varwidth = TRUE,
+               alpha=.5)+
+  labs(title='포지션 별 블락 횟수 분포(포지션+MIN 고려)',
+       y='총 블락 횟수(포지션+MIN 고려)',
+       x='포지션',
+       fill='포지션')
+
+p4=stat %>%
+  gather_residuals(mod_BLK3) %>% 
+  ggplot(aes(x = fct_reorder(Pos, desc(resid)), 
+             y = resid, 
+             fill = fct_reorder(Pos, desc(resid))))+
+  geom_violin(fill='lavender', alpha=.5)+
+  geom_boxplot(width=.5,
+               varwidth = TRUE,
+               alpha=.5)+
+  labs(title='포지션 별 블락 횟수 분포(포지션, 총 출전시간 interaction term 고려)',
+       y='총 블락 횟수(포지션, 총 출전시간 interaction term 고려)',
+       x='포지션',
+       fill='포지션')
+grid.arrange(p1,p2,p3,p4, nrow=2)
+```
+
+
+```{r}
+summary(mod_BLK1) #0.3059
+summary(mod_BLK2) #0.533
+summary(mod_BLK3) #0.6354
+#R-squared와 회귀계수를 확인하며 포지션이 총 블락 횟수에 유의미한 차이를 가진다는 것을 알 수 있고, 총 출전시간 또한 매우 중요하게 영향을 미친다는 사실을 알 수 있다. 
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
