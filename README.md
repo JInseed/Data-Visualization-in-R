@@ -10,7 +10,7 @@
 *폴더 구성*
 > Final Project
 
-> 시각화 및 Machin Learning 간단 정리 -> 추후 Rmd로 변경해서 정리예정
+> 시각화 및 Machine Learning 간단 정리 -> 추후 Rmd로 변경해서 정리예정
 
 > 시각화 과제
 <br>
